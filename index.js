@@ -7,11 +7,41 @@ const app = express();
 app.use(cors());
 app.use(express.json());
 
-// temporary test route
-app.get("/", (req, res) => {
-  res.send("Nexa backend is running 🚀");
+// ⚠️ Firebase Admin setup (we will add key next step)
+const serviceAccount = require("./serviceAccountKey.json");
+
+admin.initializeApp({
+  credential: admin.credential.cert(serviceAccount)
 });
 
-app.listen(3000, () => {
+// test route
+app.get("/", (req, res) => {
+  res.send("Nexa backend with FCM is running 🚀");
+});
+
+// 🔔 SEND NOTIFICATION ROUTE
+app.post("/send-notification", async (req, res) => {
+  const { token, title, body } = req.body;
+
+  try {
+    const message = {
+      notification: {
+        title,
+        body
+      },
+      token: token
+    };
+
+    const response = await admin.messaging().send(message);
+
+    res.json({ success: true, response });
+
+  } catch (error) {
+    res.json({ success: false, error: error.message });
+  }
+});
+
+const PORT = process.env.PORT || 3000;
+app.listen(PORT, () => {
   console.log("Server running");
 });
