@@ -12,15 +12,13 @@ app.use(express.json());
 // ============================================
 
 const serviceAccount = require("./serviceAccountKey.json");
-// 👇 RIGHT HERE INSIDE SERVER FILE
-console.log("🔥 SERVICE ACCOUNT CHECK");
+console.log("🔥 SERVICE ACCOUNT DEBUG START");
+
 console.log("PROJECT ID:", serviceAccount.project_id);
 console.log("CLIENT EMAIL:", serviceAccount.client_email);
 
-admin.initializeApp({
-  credential: admin.credential.cert(serviceAccount)
-});
-
+console.log("PRIVATE KEY START:");
+console.log(serviceAccount.private_key?.slice(0, 80));
 
 
 console.log("🔥 Firebase Admin Initialized");
