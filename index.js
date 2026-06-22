@@ -1,3 +1,5 @@
+process.env.TZ = "UTC";
+console.log("Server time:", new Date().toISOString());
 const express = require("express");
 const cors = require("cors");
 const admin = require("firebase-admin");
