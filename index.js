@@ -1,47 +1,99 @@
-
 const express = require("express");
 const cors = require("cors");
 const admin = require("firebase-admin");
 
 const app = express();
+
 app.use(cors());
 app.use(express.json());
 
-// ⚠️ Firebase Admin setup (we will add key next step)
+// ============================================
+// FIREBASE ADMIN
+// ============================================
+
 const serviceAccount = require("./serviceAccountKey.json");
 
 admin.initializeApp({
-  credential: admin.credential.cert(serviceAccount)
+credential: admin.credential.cert(serviceAccount)
 });
 
-// test route
+console.log("🔥 Firebase Admin Initialized");
+
+// ============================================
+// TEST ROUTE
+// ============================================
+
 app.get("/", (req, res) => {
-  res.send("Nexa backend with FCM is running 🚀");
+res.send("Nexa backend with FCM is running 🚀");
 });
 
-// 🔔 SEND NOTIFICATION ROUTE
+// ============================================
+// SEND PUSH NOTIFICATION
+// ============================================
+
 app.post("/send-notification", async (req, res) => {
-  const { token, title, body } = req.body;
 
-  try {
-    const message = {
-      notification: {
-        title,
-        body
-      },
-      token: token
-    };
+console.log("\n==============================");
+console.log("📩 Notification Request Received");
+console.log("==============================");
 
-    const response = await admin.messaging().send(message);
+const { token, title, body } = req.body;
 
-    res.json({ success: true, response });
+console.log("📌 Title:", title);
+console.log("📌 Body:", body);
+console.log("📌 Token:", token ? token.substring(0, 40) + "..." : "NO TOKEN");
 
-  } catch (error) {
-    res.json({ success: false, error: error.message });
-  }
+if (!token) {
+console.log("❌ No token supplied");
+
+return res.status(400).json({
+  success: false,
+  error: "No token provided"
 });
+
+}
+
+try {
+
+const message = {
+  notification: {
+    title: title || "New Message",
+    body: body || "You have a new notification"
+  },
+  token
+};
+
+console.log("🚀 Sending notification to Firebase...");
+
+const response = await admin.messaging().send(message);
+
+console.log("✅ Firebase Success");
+console.log("📨 Message ID:", response);
+
+res.json({
+  success: true,
+  response
+});
+
+} catch (error) {
+
+console.error("❌ Firebase Error:");
+console.error(error);
+
+res.status(500).json({
+  success: false,
+  error: error.message
+});
+
+}
+});
+
+// ============================================
+// START SERVER
+// ============================================
 
 const PORT = process.env.PORT || 3000;
+
 app.listen(PORT, () => {
-  console.log("Server running");
+console.log("🚀 Server running on port ${PORT}");
 });
