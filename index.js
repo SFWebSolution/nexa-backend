@@ -46,10 +46,10 @@ app.post("/send-onesignal", async (req, res) => {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
-        "Authorization": "Basic YOUR_ONESIGNAL_REST_API_KEY"
+        "Authorization": "os_v2_app_ucluyafu6nfurjxefktyjtqfglwh7ao4ty3u2vfvyoz6mk2wy6ikbhw34m247k2yc2q43u3lqziq2rb6zwc5hqrvzr7j6vd3ff3gn5y"
       },
       body: JSON.stringify({
-        app_id: "YOUR_ONESIGNAL_APP_ID",
+        app_id: "a0974c00-b4f3-4b48-a6e4-2aa784ce0532",
         include_player_ids: [playerId],
         headings: {
           en: title || "Nexa"
