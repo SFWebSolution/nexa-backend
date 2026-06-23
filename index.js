@@ -16,16 +16,18 @@ app.use(express.json());
 
 const serviceAccount = require("./serviceAccountKey.json");
 
-// 🔥 FIX: IMPORTANT FOR RENDER / PRODUCTION
+// 🔥 FIX 1: Proper private key formatting (CRITICAL)
 serviceAccount.private_key = serviceAccount.private_key.replace(/\\n/g, "\n");
 
-console.log("🔥 SERVICE ACCOUNT DEBUG START");
+console.log("🔥 SERVICE ACCOUNT CHECK START");
 console.log("PROJECT ID:", serviceAccount.project_id);
 console.log("CLIENT EMAIL:", serviceAccount.client_email);
-console.log("PRIVATE KEY START:", serviceAccount.private_key.slice(0, 50));
+
+// DO NOT fully print key in production (only partial)
+console.log("PRIVATE KEY START:", serviceAccount.private_key.slice(0, 40));
 
 // ============================================
-// FIREBASE ADMIN INIT (IMPORTANT FIX)
+// FIREBASE ADMIN INIT (FIXED)
 // ============================================
 
 admin.initializeApp({
@@ -36,14 +38,14 @@ admin.initializeApp({
   })
 });
 
-console.log("🔥 Firebase Admin Initialized");
+console.log("🔥 Firebase Admin Initialized SUCCESS");
 
 // ============================================
 // TEST ROUTE
 // ============================================
 
 app.get("/", (req, res) => {
-  res.send("Nexa backend with FCM is running 🚀");
+  res.send("🚀 Nexa backend with FCM is running");
 });
 
 // ============================================
@@ -59,9 +61,10 @@ app.post("/send-notification", async (req, res) => {
 
   console.log("📌 Title:", title);
   console.log("📌 Body:", body);
-  console.log("📌 Token:", token ? token.substring(0, 40) + "..." : "NO TOKEN");
+  console.log("📌 Token:", token ? token.substring(0, 30) + "..." : "NO TOKEN");
 
   if (!token) {
+    console.log("❌ Missing token");
     return res.status(400).json({
       success: false,
       error: "No token provided"
@@ -86,11 +89,12 @@ app.post("/send-notification", async (req, res) => {
 
     return res.json({
       success: true,
-      response
+      messageId: response
     });
 
   } catch (error) {
-    console.error("❌ Firebase Error:", error);
+    console.error("❌ Firebase Error:");
+    console.error(error);
 
     return res.status(500).json({
       success: false,
