@@ -11,21 +11,32 @@ app.use(cors());
 app.use(express.json());
 
 // ============================================
-// FIREBASE ADMIN INIT (CRITICAL FIX)
+// FIREBASE SERVICE ACCOUNT
 // ============================================
 
 const serviceAccount = require("./serviceAccountKey.json");
 
+// 🔥 FIX: IMPORTANT FOR RENDER / PRODUCTION
+serviceAccount.private_key = serviceAccount.private_key.replace(/\\n/g, "\n");
+
 console.log("🔥 SERVICE ACCOUNT DEBUG START");
 console.log("PROJECT ID:", serviceAccount.project_id);
 console.log("CLIENT EMAIL:", serviceAccount.client_email);
+console.log("PRIVATE KEY START:", serviceAccount.private_key.slice(0, 50));
 
-// THIS IS THE MOST IMPORTANT PART YOU WERE MISSING
+// ============================================
+// FIREBASE ADMIN INIT (IMPORTANT FIX)
+// ============================================
+
 admin.initializeApp({
-  credential: admin.credential.cert(serviceAccount)
+  credential: admin.credential.cert({
+    projectId: serviceAccount.project_id,
+    clientEmail: serviceAccount.client_email,
+    privateKey: serviceAccount.private_key
+  })
 });
 
-console.log("🔥 Firebase Admin Initialized SUCCESS");
+console.log("🔥 Firebase Admin Initialized");
 
 // ============================================
 // TEST ROUTE
@@ -36,11 +47,10 @@ app.get("/", (req, res) => {
 });
 
 // ============================================
-// SEND NOTIFICATION
+// SEND NOTIFICATION ROUTE
 // ============================================
 
 app.post("/send-notification", async (req, res) => {
-
   console.log("\n==============================");
   console.log("📩 Notification Request Received");
   console.log("==============================");
@@ -51,7 +61,15 @@ app.post("/send-notification", async (req, res) => {
   console.log("📌 Body:", body);
   console.log("📌 Token:", token ? token.substring(0, 40) + "..." : "NO TOKEN");
 
+  if (!token) {
+    return res.status(400).json({
+      success: false,
+      error: "No token provided"
+    });
+  }
+
   try {
+    console.log("🚀 Sending notification to Firebase...");
 
     const message = {
       notification: {
@@ -61,19 +79,20 @@ app.post("/send-notification", async (req, res) => {
       token
     };
 
-    console.log("🚀 Sending notification to Firebase...");
-
     const response = await admin.messaging().send(message);
 
     console.log("✅ Firebase Success");
     console.log("📨 Message ID:", response);
 
-    res.json({ success: true, response });
+    return res.json({
+      success: true,
+      response
+    });
 
   } catch (error) {
-    console.error("❌ Firebase Error:", error.message);
+    console.error("❌ Firebase Error:", error);
 
-    res.status(500).json({
+    return res.status(500).json({
       success: false,
       error: error.message
     });
