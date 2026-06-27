@@ -1,91 +1,94 @@
-process.env.TZ = "UTC";
-console.log("Server time:", new Date().toISOString());
-
-const express = require("express");
-const cors = require("cors");
+require('dotenv').config();
+const express = require('express');
+const cors = require('cors');
 
 const app = express();
+const PORT = process.env.PORT || 3000;
 
 app.use(cors());
 app.use(express.json());
 
 // =====================================================
-// TEST ROUTE
+// CONSTANTS
 // =====================================================
-app.get("/", (req, res) => {
-  res.send("🚀 Nexa backend with OneSignal is running");
+const ONESIGNAL_APP_ID = 'a0974c00-b4f3-4b48-a6e4-2aa784ce0532';
+const ONESIGNAL_API_KEY = 'os_v2_app_ucluyafu6nfurjxefktyjtqfglwh7ao4ty3u2vfvyoz6mk2wy6ikbhw34m247k2yc2q43u3lqziq2rb6zwc5hqrvzr7j6vd3ff3gn5y';
+
+// =====================================================
+// ROUTES
+// =====================================================
+app.get('/', (req, res) => {
+  res.json({ status: '✅ Nexa Backend Online', onesignal: 'Ready' });
 });
 
 // =====================================================
-// SEND NOTIFICATION (ONESIGNAL)
+// SEND NOTIFICATION VIA ONESIGNAL
 // =====================================================
-app.post("/send-onesignal", async (req, res) => {
-  console.log("\n==============================");
-  console.log("📩 OneSignal Request Received");
-  console.log("==============================");
-
+app.post('/send-onesignal', async (req, res) => {
   const { playerId, title, body } = req.body;
 
-  console.log("📌 Title:", title);
-  console.log("📌 Body:", body);
-  console.log("📌 Player ID:", playerId ? playerId.substring(0, 30) + "..." : "NO ID");
-
   if (!playerId) {
-    console.log("❌ Missing Player ID");
-
     return res.status(400).json({
       success: false,
-      error: "No playerId provided"
+      error: 'playerId is required',
+    });
+  }
+
+  if (!title || !body) {
+    return res.status(400).json({
+      success: false,
+      error: 'title and body are required',
     });
   }
 
   try {
-    console.log("🚀 Sending notification via OneSignal...");
-
-    const response = await fetch("https://onesignal.com/api/v1/notifications", {
-      method: "POST",
+    const response = await fetch('https://onesignal.com/api/v1/notifications', {
+      method: 'POST',
       headers: {
-        "Content-Type": "application/json",
-        "Authorization": "os_v2_app_ucluyafu6nfurjxefktyjtqfglwh7ao4ty3u2vfvyoz6mk2wy6ikbhw34m247k2yc2q43u3lqziq2rb6zwc5hqrvzr7j6vd3ff3gn5y"
+        'Content-Type': 'application/json',
+        'Authorization': `Basic ${Buffer.from(ONESIGNAL_API_KEY).toString('base64')}`,
       },
       body: JSON.stringify({
-        app_id: "a0974c00-b4f3-4b48-a6e4-2aa784ce0532",
-        include_player_ids: [playerId],
-        headings: {
-          en: title || "Nexa"
-        },
-        contents: {
-          en: body || "You have a new message"
-        }
-      })
+        app_id: ONESIGNAL_APP_ID,
+        include_external_user_ids: [playerId],
+        headings: { en: title },
+        contents: { en: body },
+        data: { timestamp: Date.now() },
+      }),
     });
 
     const data = await response.json();
 
-    console.log("✅ OneSignal Response:");
-    console.log(data);
+    if (!response.ok) {
+      console.error('❌ OneSignal Error:', data);
+      return res.status(response.status).json({
+        success: false,
+        error: data.errors ? data.errors[0] : 'OneSignal API error',
+      });
+    }
 
-    return res.json({
-      success: true,
-      data
-    });
-
+    console.log('✅ Notification sent to', playerId.substring(0, 20) + '...');
+    return res.json({ success: true, notificationId: data.id });
   } catch (error) {
-    console.error("❌ OneSignal Error:");
-    console.error(error);
-
+    console.error('❌ Server Error:', error);
     return res.status(500).json({
       success: false,
-      error: error.message
+      error: error.message,
     });
   }
+});
+
+// =====================================================
+// HEALTH CHECK
+// =====================================================
+app.get('/health', (req, res) => {
+  res.json({ status: 'ok', timestamp: new Date().toISOString() });
 });
 
 // =====================================================
 // START SERVER
 // =====================================================
-const PORT = process.env.PORT || 3000;
-
 app.listen(PORT, () => {
-  console.log(`🚀 Server running on port ${PORT}`);
+  console.log(`🚀 Nexa Server running on port ${PORT}`);
+  console.log(`📍 OneSignal App ID: ${ONESIGNAL_APP_ID}`);
 });
