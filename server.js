@@ -133,6 +133,14 @@ app.post("/api/send-notification", async (req, res) => {
     // Deduplicate tokens
     tokens = [...new Set(tokens)];
 
+    // FCM data values MUST all be strings
+    const safeData = {};
+    if (data && typeof data === 'object') {
+      Object.entries(data).forEach(([key, val]) => {
+        safeData[key] = String(val ?? '');
+      });
+    }
+
     const payload = {
       notification: {
         title: title,
@@ -144,15 +152,26 @@ app.post("/api/send-notification", async (req, res) => {
         title: title,
         body: body || "",
         senderUid: data?.senderUid || "",
-        ...(data || {})
+        ...safeData
       },
       tokens: tokens
     };
+
+    console.log(`📦 Payload tokens (${tokens.length}):`, tokens.map(t => t.substring(0, 30) + '...'));
+    console.log(`📦 Notification:`, payload.notification);
 
     console.log(`🚀 Sending FCM notification to user ${targetUid} (${tokens.length} token(s))...`);
 
     const response = await admin.messaging().sendEachForMulticast(payload);
     console.log(`✅ FCM Result: ${response.successCount} succeeded, ${response.failureCount} failed.`);
+
+    // Log detailed error for each failure
+    response.responses.forEach((resp, idx) => {
+      if (!resp.success && resp.error) {
+        console.error(`❌ Token[${idx}] error: code=${resp.error.code}, message=${resp.error.message}`);
+        console.error(`   Token value: ${tokens[idx].substring(0, 20)}...`);
+      }
+    });
 
     // Clean up stale or invalid tokens
     const staleTokens = [];
