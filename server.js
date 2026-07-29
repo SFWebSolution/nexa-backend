@@ -100,7 +100,108 @@ app.post("/api/delete-token", async (req, res) => {
 });
 
 /**
- * Send Push Notification to User
+ * Helper: Build a DATA-ONLY FCM payload.
+ * ──────────────────────────────────────────────────────────────────
+ * KEY DESIGN DECISION – We intentionally do NOT include a top-level
+ * `notification` key. This means FCM will always treat the message
+ * as a "data message" and hand it to the service worker's `push`
+ * event (or Firebase SDK's `onBackgroundMessage`) regardless of
+ * whether the browser / app is in the foreground, background, or
+ * completely closed.
+ *
+ * If we used `notification`, FCM would auto-display it on Android
+ * and the service worker would never get the chance to run when the
+ * browser tab is closed — which breaks notifications for users who
+ * haven't opened the app.
+ *
+ * The service worker is responsible for calling
+ * `self.registration.showNotification(...)` manually.
+ * ──────────────────────────────────────────────────────────────────
+ */
+function buildFCMPayload(title, body, icon, data, tokens) {
+  // FCM data values MUST all be strings
+  const safeData = {};
+  if (data && typeof data === "object") {
+    Object.entries(data).forEach(([key, val]) => {
+      safeData[key] = String(val ?? "");
+    });
+  }
+
+  return {
+    // ── NO top-level `notification` key ──
+    // This ensures the service worker ALWAYS fires, even when the
+    // browser is closed or the user has never opened the app.
+
+    android: {
+      priority: "high"
+    },
+
+    webpush: {
+      headers: {
+        Urgency: "high",
+        TTL: "86400"           // Keep message alive for 24 hours
+      },
+      fcmOptions: {
+        link: "/dashboard.html"
+      }
+    },
+
+    // All notification content is passed as data so the SW can
+    // construct the notification itself.
+    data: {
+      title: title || "Nexa Messenger",
+      body: body || "You have a new message",
+      icon: icon || "/icon-192.png",
+      badge: "/icon-192.png",
+      click_action: "/dashboard.html",
+      tag: "nexa-push-" + Date.now(),
+      senderUid: data?.senderUid || "",
+      timestamp: String(Date.now()),
+      ...safeData
+    },
+
+    tokens: tokens
+  };
+}
+
+/**
+ * Helper: Send an FCM multicast and clean up stale tokens.
+ */
+async function sendAndCleanup(payload, tokens, targetLabel) {
+  console.log(`📦 Payload tokens (${tokens.length}):`, tokens.map(t => t.substring(0, 30) + "..."));
+  console.log(`📦 Data:`, { title: payload.data.title, body: payload.data.body });
+  console.log(`🚀 Sending FCM data-only push to ${targetLabel} (${tokens.length} token(s))...`);
+
+  const response = await admin.messaging().sendEachForMulticast(payload);
+  console.log(`✅ FCM Result: ${response.successCount} succeeded, ${response.failureCount} failed.`);
+
+  // Log detailed error for each failure
+  response.responses.forEach((resp, idx) => {
+    if (!resp.success && resp.error) {
+      console.error(`❌ Token[${idx}] error: code=${resp.error.code}, message=${resp.error.message}`);
+      console.error(`   Token value: ${tokens[idx].substring(0, 20)}...`);
+    }
+  });
+
+  // Identify stale / invalid tokens
+  const staleTokens = [];
+  response.responses.forEach((resp, idx) => {
+    if (!resp.success && resp.error) {
+      const code = resp.error.code;
+      if (
+        code === "messaging/invalid-registration-token" ||
+        code === "messaging/registration-token-not-registered"
+      ) {
+        staleTokens.push(tokens[idx]);
+      }
+    }
+  });
+
+  return { response, staleTokens };
+}
+
+/**
+ * Send Push Notification to User (by UID)
  * POST /api/send-notification
  * Body: { targetUid, title, body, icon, data }
  */
@@ -133,66 +234,10 @@ app.post("/api/send-notification", async (req, res) => {
     // Deduplicate tokens
     tokens = [...new Set(tokens)];
 
-    // FCM data values MUST all be strings
-    const safeData = {};
-    if (data && typeof data === 'object') {
-      Object.entries(data).forEach(([key, val]) => {
-        safeData[key] = String(val ?? '');
-      });
-    }
+    const payload = buildFCMPayload(title, body, icon, data, tokens);
+    const { response, staleTokens } = await sendAndCleanup(payload, tokens, `user ${targetUid}`);
 
-    const payload = {
-      notification: {
-        title: title,
-        body: body || ""
-      },
-      webpush: {
-        notification: {
-          icon: icon || "/icon-192.png",
-          badge: "/icon-192.png",
-          click_action: "/dashboard.html"
-        }
-      },
-      data: {
-        click_action: "/dashboard.html",
-        title: title,
-        body: body || "",
-        senderUid: data?.senderUid || "",
-        ...safeData
-      },
-      tokens: tokens
-    };
-
-    console.log(`📦 Payload tokens (${tokens.length}):`, tokens.map(t => t.substring(0, 30) + '...'));
-    console.log(`📦 Notification:`, payload.notification);
-
-    console.log(`🚀 Sending FCM notification to user ${targetUid} (${tokens.length} token(s))...`);
-
-    const response = await admin.messaging().sendEachForMulticast(payload);
-    console.log(`✅ FCM Result: ${response.successCount} succeeded, ${response.failureCount} failed.`);
-
-    // Log detailed error for each failure
-    response.responses.forEach((resp, idx) => {
-      if (!resp.success && resp.error) {
-        console.error(`❌ Token[${idx}] error: code=${resp.error.code}, message=${resp.error.message}`);
-        console.error(`   Token value: ${tokens[idx].substring(0, 20)}...`);
-      }
-    });
-
-    // Clean up stale or invalid tokens
-    const staleTokens = [];
-    response.responses.forEach((resp, idx) => {
-      if (!resp.success && resp.error) {
-        const code = resp.error.code;
-        if (
-          code === "messaging/invalid-registration-token" ||
-          code === "messaging/registration-token-not-registered"
-        ) {
-          staleTokens.push(tokens[idx]);
-        }
-      }
-    });
-
+    // Clean up stale tokens from Firestore
     if (staleTokens.length > 0) {
       console.log(`🧹 Removing ${staleTokens.length} invalid/stale token(s) for user ${targetUid}`);
       await db.collection("users").doc(targetUid).update({
@@ -207,6 +252,51 @@ app.post("/api/send-notification", async (req, res) => {
     });
   } catch (err) {
     console.error("❌ Error sending push notification:", err);
+    return res.status(500).json({ error: err.message });
+  }
+});
+
+/**
+ * Send Push Notification directly by FCM Token(s)
+ * POST /api/send-notification-by-token
+ * Body: { token (string) OR tokens (string[]), title, body, icon, data }
+ *
+ * Use this when you already have the FCM token and don't need a UID lookup.
+ * Works even if the user has never opened the app — as long as the token
+ * is valid and the browser has granted notification permission previously.
+ */
+app.post("/api/send-notification-by-token", async (req, res) => {
+  try {
+    const { token, tokens: rawTokens, title, body, icon, data } = req.body;
+
+    // Accept either a single `token` string or an array of `tokens`
+    let tokens = [];
+    if (Array.isArray(rawTokens) && rawTokens.length > 0) {
+      tokens = rawTokens.filter(t => typeof t === "string" && t.length > 0);
+    } else if (typeof token === "string" && token.length > 0) {
+      tokens = [token];
+    }
+
+    if (tokens.length === 0) {
+      return res.status(400).json({ error: "Missing token or tokens" });
+    }
+    if (!title) {
+      return res.status(400).json({ error: "Missing title" });
+    }
+
+    // Deduplicate
+    tokens = [...new Set(tokens)];
+
+    const payload = buildFCMPayload(title, body, icon, data, tokens);
+    const { response } = await sendAndCleanup(payload, tokens, "direct token(s)");
+
+    return res.json({
+      success: true,
+      successCount: response.successCount,
+      failureCount: response.failureCount
+    });
+  } catch (err) {
+    console.error("❌ Error sending push notification by token:", err);
     return res.status(500).json({ error: err.message });
   }
 });
