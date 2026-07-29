@@ -144,8 +144,14 @@ app.post("/api/send-notification", async (req, res) => {
     const payload = {
       notification: {
         title: title,
-        body: body || "",
-        icon: icon || "/icon-192.png"
+        body: body || ""
+      },
+      webpush: {
+        notification: {
+          icon: icon || "/icon-192.png",
+          badge: "/icon-192.png",
+          click_action: "/dashboard.html"
+        }
       },
       data: {
         click_action: "/dashboard.html",
