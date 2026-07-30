@@ -127,31 +127,51 @@ function buildFCMPayload(title, body, icon, data, tokens) {
     });
   }
 
+  const notifTitle = title || "Nexa Messenger";
+  const notifBody = body || "You have received a new message";
+  const notifIcon = icon || "/icon-192.png";
+
   return {
-    // ── NO top-level `notification` key ──
-    // This ensures the service worker ALWAYS fires, even when the
-    // browser is closed or the user has never opened the app.
+    notification: {
+      title: notifTitle,
+      body: notifBody,
+    },
 
     android: {
-      priority: "high"
+      priority: "high",
+      notification: {
+        title: notifTitle,
+        body: notifBody,
+        icon: notifIcon,
+        sound: "default",
+        priority: "high",
+        channelId: "nexa_messages"
+      }
     },
 
     webpush: {
       headers: {
         Urgency: "high",
-        TTL: "86400"           // Keep message alive for 24 hours
+        TTL: "86400"
+      },
+      notification: {
+        title: notifTitle,
+        body: notifBody,
+        icon: notifIcon,
+        badge: "/icon-192.png",
+        renotify: true,
+        requireInteraction: true,
+        tag: "nexa-push-" + Date.now()
       },
       fcmOptions: {
         link: "/dashboard.html"
       }
     },
 
-    // All notification content is passed as data so the SW can
-    // construct the notification itself.
     data: {
-      title: title || "Nexa Messenger",
-      body: body || "You have a new message",
-      icon: icon || "/icon-192.png",
+      title: notifTitle,
+      body: notifBody,
+      icon: notifIcon,
       badge: "/icon-192.png",
       click_action: "/dashboard.html",
       tag: "nexa-push-" + Date.now(),
