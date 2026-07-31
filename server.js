@@ -322,6 +322,98 @@ app.post("/api/send-notification-by-token", async (req, res) => {
 });
 
 /**
+ * Admin: Ban / Unban User
+ * POST /api/admin/ban-user
+ * Body: { uid, banned }
+ */
+app.post("/api/admin/ban-user", async (req, res) => {
+  try {
+    const { uid, banned } = req.body;
+    if (!uid) {
+      return res.status(400).json({ error: "Missing uid" });
+    }
+
+    const isBanned = !!banned;
+
+    // Update Firestore user document
+    await db.collection("users").doc(uid).set({
+      banned: isBanned,
+      updatedAt: Date.now()
+    }, { merge: true });
+
+    // Update Firebase Auth user account (disable/enable) if admin auth is initialized
+    try {
+      if (admin.apps.length) {
+        await admin.auth().updateUser(uid, { disabled: isBanned });
+        console.log(`🔒 Auth account for user ${uid} ${isBanned ? 'disabled' : 'enabled'}`);
+      }
+    } catch (authErr) {
+      console.warn(`⚠️ Could not update Auth state for user ${uid}:`, authErr.message);
+    }
+
+    // Set presence to offline if banned
+    if (isBanned) {
+      await db.collection("presence").doc(uid).set({ status: "offline", lastSeen: Date.now() }, { merge: true }).catch(() => {});
+    }
+
+    console.log(`🚫 Admin ${isBanned ? 'banned' : 'unbanned'} user: ${uid}`);
+    return res.json({ success: true, banned: isBanned, message: `User ${isBanned ? 'banned' : 'unbanned'} successfully` });
+  } catch (err) {
+    console.error("❌ Error banning user:", err);
+    return res.status(500).json({ error: err.message });
+  }
+});
+
+/**
+ * Admin: Permanently Delete User
+ * POST /api/admin/delete-user
+ * Body: { uid }
+ */
+app.post("/api/admin/delete-user", async (req, res) => {
+  try {
+    const { uid } = req.body;
+    if (!uid) {
+      return res.status(400).json({ error: "Missing uid" });
+    }
+
+    // 1. Delete Firestore user document
+    await db.collection("users").doc(uid).delete();
+
+    // 2. Delete presence document
+    await db.collection("presence").doc(uid).delete().catch(() => {});
+
+    // 3. Delete user's status/stories
+    try {
+      const statusDocs = await db.collection("status").where("uid", "==", uid).get();
+      if (!statusDocs.empty) {
+        const batch = db.batch();
+        statusDocs.docs.forEach(doc => batch.delete(doc.ref));
+        await batch.commit();
+      }
+    } catch (statusErr) {
+      console.warn(`⚠️ Error deleting status docs for user ${uid}:`, statusErr.message);
+    }
+
+    // 4. Delete user from Firebase Auth
+    try {
+      if (admin.apps.length) {
+        await admin.auth().deleteUser(uid);
+        console.log(`🗑️ Auth account deleted for user ${uid}`);
+      }
+    } catch (authErr) {
+      console.warn(`⚠️ Could not delete Auth account for user ${uid}:`, authErr.message);
+    }
+
+    console.log(`❌ Admin permanently deleted user: ${uid}`);
+    return res.json({ success: true, message: `User ${uid} deleted successfully` });
+  } catch (err) {
+    console.error("❌ Error deleting user:", err);
+    return res.status(500).json({ error: err.message });
+  }
+});
+
+
+/**
  * ⚡ Realtime Server-Side Firestore Message Listener (Instant FCM Push)
  * ──────────────────────────────────────────────────────────────────
  * Listens directly to Firestore `chats` collection for newly created
