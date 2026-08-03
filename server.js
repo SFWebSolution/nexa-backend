@@ -131,6 +131,8 @@ function buildFCMPayload(title, body, icon, data, tokens) {
   const notifBody = body || "You have received a new message";
   const notifIcon = icon || "/icon-192.png";
 
+  const isCall = String(data?.isCall) === "true" || title.includes("Call");
+
   return {
     notification: {
       title: notifTitle,
@@ -143,15 +145,28 @@ function buildFCMPayload(title, body, icon, data, tokens) {
         title: notifTitle,
         body: notifBody,
         icon: notifIcon,
-        sound: "default",
+        sound: isCall ? "default" : "default",
         priority: "high",
-        channelId: "nexa_messages"
+        channelId: isCall ? "nexa_calls" : "nexa_messages",
+        defaultSound: true,
+        defaultVibrateTimings: false,
+        vibrateTimingsMillis: isCall ? [0, 500, 250, 500, 250, 500, 250, 500] : [0, 200, 100, 200]
+      }
+    },
+
+    apns: {
+      payload: {
+        aps: {
+          sound: isCall ? "default" : "default",
+          badge: 1,
+          contentAvailable: true
+        }
       }
     },
 
     webpush: {
       headers: {
-        Urgency: "high",
+        Urgency: isCall ? "very-high" : "high",
         TTL: "86400"
       },
       notification: {
@@ -159,9 +174,10 @@ function buildFCMPayload(title, body, icon, data, tokens) {
         body: notifBody,
         icon: notifIcon,
         badge: "/icon-192.png",
+        sound: "/iphone.mp3",
         renotify: true,
         requireInteraction: true,
-        tag: "nexa-push-" + Date.now()
+        tag: isCall ? "nexa-incoming-call" : ("nexa-push-" + Date.now())
       },
       fcmOptions: {
         link: "/dashboard.html"
@@ -174,9 +190,10 @@ function buildFCMPayload(title, body, icon, data, tokens) {
       icon: notifIcon,
       badge: "/icon-192.png",
       click_action: "/dashboard.html",
-      tag: "nexa-push-" + Date.now(),
+      tag: isCall ? "nexa-incoming-call" : ("nexa-push-" + Date.now()),
       senderUid: data?.senderUid || "",
       timestamp: String(Date.now()),
+      isCall: isCall ? "true" : "false",
       ...safeData
     },
 
@@ -431,6 +448,21 @@ function startAutoPushListener() {
 
   console.log("⚡ Starting Nexa Realtime Auto-Push Listener for Firestore...");
   const processedDocs = new Set();
+  const userCache = new Map(); // Cache user data for 3 minutes to eliminate DB latency
+  const USER_CACHE_TTL = 3 * 60 * 1000;
+
+  async function getCachedUser(uid) {
+    const cached = userCache.get(uid);
+    if (cached && (Date.now() - cached.timestamp < USER_CACHE_TTL)) {
+      return cached.data;
+    }
+    const docSnap = await db.collection("users").doc(uid).get();
+    const data = docSnap.exists ? docSnap.data() : null;
+    if (data) {
+      userCache.set(uid, { data, timestamp: Date.now() });
+    }
+    return data;
+  }
 
   db.collection("chats")
     .where("read", "==", false)
@@ -454,10 +486,9 @@ function startAutoPushListener() {
         if (!targetUid || !senderUid) return;
 
         try {
-          const targetUserDoc = await db.collection("users").doc(targetUid).get();
-          if (!targetUserDoc.exists) return;
+          const targetData = await getCachedUser(targetUid);
+          if (!targetData) return;
 
-          const targetData = targetUserDoc.data();
           let tokens = [];
           if (Array.isArray(targetData.fcmTokens) && targetData.fcmTokens.length > 0) {
             tokens = targetData.fcmTokens.filter(t => typeof t === "string" && t.length > 0);
@@ -468,9 +499,9 @@ function startAutoPushListener() {
           if (!tokens.length) return;
 
           let senderName = "Nexa User";
-          const senderUserDoc = await db.collection("users").doc(senderUid).get();
-          if (senderUserDoc.exists && senderUserDoc.data().displayName) {
-            senderName = senderUserDoc.data().displayName;
+          const senderData = await getCachedUser(senderUid);
+          if (senderData && senderData.displayName) {
+            senderName = senderData.displayName;
           }
 
           const bodyText = msg.text
