@@ -35,6 +35,21 @@ if (!admin.apps.length) {
 
 const db = admin.firestore();
 
+// ── Admin endpoints guard ───────────────────────────────────────────────────
+// /api/admin/* can edit/ban/delete ANY user, so every call must carry the
+// X-Admin-Secret header matching the ADMIN_SECRET env var. admin.html sends
+// it via its ADMIN_SECRET const.
+function requireAdminSecret(req, res, next) {
+  const secret = process.env.ADMIN_SECRET;
+  if (!secret) {
+    return res.status(500).json({ success: false, error: "ADMIN_SECRET not configured on server" });
+  }
+  if (req.get("X-Admin-Secret") !== secret) {
+    return res.status(403).json({ success: false, error: "Forbidden" });
+  }
+  next();
+}
+
 // Health check endpoint
 app.get("/", (req, res) => {
   res.json({ status: "online", app: "Nexa Backend with FCM Push Notifications" });
@@ -339,11 +354,44 @@ app.post("/api/send-notification-by-token", async (req, res) => {
 });
 
 /**
+ * Admin: Edit User Profile
+ * POST /api/admin/edit-user
+ * Body: { uid, displayName, email? }
+ */
+app.post("/api/admin/edit-user", requireAdminSecret, async (req, res) => {
+  try {
+    const { uid, displayName, email } = req.body || {};
+    if (!uid || typeof uid !== "string") {
+      return res.status(400).json({ success: false, error: "uid required" });
+    }
+    if (!displayName || typeof displayName !== "string" || !displayName.trim()) {
+      return res.status(400).json({ success: false, error: "displayName required" });
+    }
+    const name = displayName.trim().slice(0, 100);
+    const update = {
+      displayName: name,
+      name,
+      updatedAt: Date.now(),
+      lastModifiedBy: "admin-backend"
+    };
+    if (email && typeof email === "string" && email.includes("@")) {
+      update.email = email.trim().slice(0, 200);
+    }
+    await db.collection("users").doc(uid).update(update);
+    console.log(`✏️ Admin edited user: ${uid}`);
+    return res.json({ success: true });
+  } catch (err) {
+    console.error("❌ Error editing user:", err);
+    return res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+/**
  * Admin: Ban / Unban User
  * POST /api/admin/ban-user
  * Body: { uid, banned }
  */
-app.post("/api/admin/ban-user", async (req, res) => {
+app.post("/api/admin/ban-user", requireAdminSecret, async (req, res) => {
   try {
     const { uid, banned } = req.body;
     if (!uid) {
@@ -386,7 +434,7 @@ app.post("/api/admin/ban-user", async (req, res) => {
  * POST /api/admin/delete-user
  * Body: { uid }
  */
-app.post("/api/admin/delete-user", async (req, res) => {
+app.post("/api/admin/delete-user", requireAdminSecret, async (req, res) => {
   try {
     const { uid } = req.body;
     if (!uid) {
