@@ -148,68 +148,49 @@ function buildFCMPayload(title, body, icon, data, tokens) {
 
   const isCall = String(data?.isCall) === "true" || title.includes("Call");
 
+  // ── DATA-ONLY, by design ──────────────────────────────────────────────
+  // We deliberately send NO top-level `notification` and NO
+  // `webpush.notification`. Those carry a DISPLAY_NOTIFICATION payload, which
+  // makes the Firebase Messaging SDK auto-show a notification IN ADDITION to
+  // the one our service worker renders from the `push` handler -> TWO
+  // notifications per message. Data-only keeps exactly one: the SW's.
+  //
+  // The `tag` is NOT hardcoded here. A fixed tag (e.g. nexa-push-<Date.now()>)
+  // would defeat the SW's stable per-message tag, so the same message sent to
+  // several of a user's FCM tokens would stack instead of collapsing into one.
+  // For messages we omit it entirely and let the SW derive `nexa-msg-<messageId>`;
+  // only calls get the shared fixed tag so a new call replaces the old one.
   return {
-    notification: {
-      title: notifTitle,
-      body: notifBody,
-    },
-
-    android: {
-      priority: "high",
-      notification: {
-        title: notifTitle,
-        body: notifBody,
-        icon: notifIcon,
-        sound: isCall ? "default" : "default",
-        priority: "high",
-        channelId: isCall ? "nexa_calls" : "nexa_messages",
-        defaultSound: true,
-        defaultVibrateTimings: false,
-        vibrateTimingsMillis: isCall ? [0, 500, 250, 500, 250, 500, 250, 500] : [0, 200, 100, 200]
-      }
-    },
-
-    apns: {
-      payload: {
-        aps: {
-          sound: isCall ? "default" : "default",
-          badge: 1,
-          contentAvailable: true
-        }
-      }
-    },
-
-    webpush: {
-      headers: {
-        Urgency: isCall ? "very-high" : "high",
-        TTL: "86400"
-      },
-      notification: {
-        title: notifTitle,
-        body: notifBody,
-        icon: notifIcon,
-        badge: "/icon-192.png",
-        sound: "/iphone.mp3",
-        renotify: true,
-        requireInteraction: true,
-        tag: isCall ? "nexa-incoming-call" : ("nexa-push-" + Date.now())
-      },
-      fcmOptions: {
-        link: "/dashboard.html"
-      }
-    },
-
     data: {
       title: notifTitle,
       body: notifBody,
       icon: notifIcon,
       badge: "/icon-192.png",
       click_action: "/dashboard.html",
-      tag: isCall ? "nexa-incoming-call" : ("nexa-push-" + Date.now()),
+      tag: isCall ? "nexa-incoming-call" : "",
+      isCall: isCall ? "true" : "false",
       senderUid: data?.senderUid || "",
       timestamp: String(Date.now()),
-      isCall: isCall ? "true" : "false",
       ...safeData
+    },
+
+    webpush: {
+      headers: {
+        Urgency: isCall ? "very-high" : "high",
+        TTL: "86400"
+      }
+    },
+
+    android: {
+      priority: "high"
+    },
+
+    apns: {
+      payload: {
+        aps: {
+          contentAvailable: true
+        }
+      }
     },
 
     tokens: tokens
