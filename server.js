@@ -492,6 +492,11 @@ function startAutoPushListener() {
 
   console.log("⚡ Starting Nexa Realtime Auto-Push Listener for Firestore...");
   const processedDocs = new Set();
+  // Docs we've already handed to sendAndCleanup but haven't yet seen flip to
+  // _pushed:true. The `_pushed` write happens AFTER the send, so without an
+  // in-flight guard a rapid reconnect / redeploy could replay the same
+  // snapshot and fire a duplicate notification.
+  const inFlight = new Set();
   const userCache = new Map(); // Cache user data for 3 minutes to eliminate DB latency
   const USER_CACHE_TTL = 3 * 60 * 1000;
 
@@ -517,7 +522,8 @@ function startAutoPushListener() {
         const docId = change.doc.id;
         const msg = change.doc.data();
 
-        if (!msg || msg._pushed || processedDocs.has(docId)) return;
+        if (!msg || msg._pushed || processedDocs.has(docId) || inFlight.has(docId)) return;
+        inFlight.add(docId);
         processedDocs.add(docId);
 
         if (processedDocs.size > 2000) {
@@ -565,6 +571,10 @@ function startAutoPushListener() {
           console.log(`⚡ Instant Push sent to ${targetUid} for message ${docId}`);
         } catch (err) {
           console.error(`❌ Auto-push error for msg ${docId}:`, err.message);
+        } finally {
+          // Release the in-flight mark; `processedDocs` plus the doc's own
+          // `_pushed:true` write keep it from being sent twice afterwards.
+          inFlight.delete(docId);
         }
       });
     }, err => {
