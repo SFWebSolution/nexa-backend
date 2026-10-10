@@ -170,6 +170,9 @@ function buildFCMPayload(title, body, icon, data, tokens) {
       tag: isCall ? "nexa-incoming-call" : "",
       isCall: isCall ? "true" : "false",
       senderUid: data?.senderUid || "",
+      // Explicit deep-link target for the native notification tap. Falls back to
+      // the sender uid, which is what the web uses to open the 1:1 chat.
+      chatUid: data?.chatUid || data?.senderUid || "",
       timestamp: String(Date.now()),
       ...safeData
     },
@@ -181,8 +184,20 @@ function buildFCMPayload(title, body, icon, data, tokens) {
       }
     },
 
+    // Android-only display block. This has NO effect on web push (the web
+    // branch of webpush stays header-only/data-only), but it makes the NATIVE
+    // Android app reliably show a system notification when the app is
+    // backgrounded or killed. chatUid lets the native notification deep-link
+    // straight into the right conversation on tap.
     android: {
-      priority: "high"
+      priority: "high",
+      notification: {
+        title: notifTitle,
+        body: notifBody,
+        sound: "default",
+        channel_id: isCall ? "nexa_calls" : "nexa_default",
+        click_action: isCall ? "OPEN_CALL" : "OPEN_CHAT"
+      }
     },
 
     apns: {
