@@ -66,22 +66,32 @@ app.get("/api/health", (req, res) => {
  */
 app.post("/api/save-token", async (req, res) => {
   try {
-    const { uid, token } = req.body;
+    const { uid, token, ua, platform } = req.body;
     if (!uid || !token) {
       return res.status(400).json({ error: "Missing uid or token" });
     }
 
     const userRef = db.collection("users").doc(uid);
+    // Record per-token metadata so /api/push-diagnostics can show WHICH devices
+    // are actually registered and WHEN. A device whose token never shows up here
+    // never registered (permission denied, or the token POST never ran).
+    const tokenInfo = {};
+    tokenInfo[token] = {
+      addedAt: Date.now(),
+      platform: String(platform || "").slice(0, 40),
+      ua: String(ua || "").slice(0, 160)
+    };
     await userRef.set(
       {
         fcmToken: token,
         fcmTokens: admin.firestore.FieldValue.arrayUnion(token),
+        fcmTokenInfo: tokenInfo,
         lastTokenUpdate: admin.firestore.FieldValue.serverTimestamp()
       },
       { merge: true }
     );
 
-    console.log(`📲 FCM Token saved for user: ${uid}`);
+    console.log(`📲 FCM Token saved for user: ${uid} (${String(platform || "unknown")})`);
     return res.json({ success: true, message: "Token saved successfully" });
   } catch (err) {
     console.error("Error saving FCM token:", err);
@@ -110,6 +120,79 @@ app.post("/api/delete-token", async (req, res) => {
     return res.json({ success: true, message: "Token deleted successfully" });
   } catch (err) {
     console.error("Error deleting FCM token:", err);
+    return res.status(500).json({ error: err.message });
+  }
+});
+
+/**
+ * Send a test push to the caller's OWN tokens.
+ * POST /api/test-push  Body: { uid }
+ * Lets a single device verify end-to-end delivery without a second account.
+ */
+app.post("/api/test-push", async (req, res) => {
+  try {
+    const { uid } = req.body;
+    if (!uid) return res.status(400).json({ error: "Missing uid" });
+    const userDoc = await db.collection("users").doc(uid).get();
+    if (!userDoc.exists) return res.status(404).json({ error: "User not found" });
+    const ud = userDoc.data();
+    const tokens = Array.isArray(ud.fcmTokens) ? ud.fcmTokens.filter(Boolean) : [];
+    if (!tokens.length) {
+      return res.json({ success: false, reason: "no-tokens", message: "No registered devices for this account.", total: 0 });
+    }
+    const payload = buildFCMPayload(
+      "Nexa test",
+      "If you can see this, push notifications work on this device.",
+      "/icon-192.png",
+      { isCall: "false", chatUid: uid },
+      tokens
+    );
+    const { response, staleTokens } = await sendAndCleanup(payload, tokens, uid);
+    if (staleTokens.length) {
+      await db.collection("users").doc(uid)
+        .update({ fcmTokens: admin.firestore.FieldValue.arrayRemove(...staleTokens) })
+        .catch(() => {});
+    }
+    return res.json({
+      success: true,
+      total: tokens.length,
+      successCount: response.successCount,
+      failureCount: response.failureCount,
+      pruned: staleTokens.length
+    });
+  } catch (err) {
+    console.error("test-push error:", err);
+    return res.status(500).json({ error: err.message });
+  }
+});
+
+/**
+ * Sanitized push-registration info for a uid (NEVER returns full tokens).
+ * GET /api/push-diagnostics?uid=...
+ * Shows which devices registered, when, and from what platform/UA — so a
+ * "no notifications" report can tell "never registered" apart from
+ * "registered but not delivering".
+ */
+app.get("/api/push-diagnostics", async (req, res) => {
+  try {
+    const uid = req.query.uid;
+    if (!uid) return res.status(400).json({ error: "Missing uid" });
+    const userDoc = await db.collection("users").doc(uid).get();
+    if (!userDoc.exists) return res.status(404).json({ error: "User not found" });
+    const ud = userDoc.data();
+    const tokens = Array.isArray(ud.fcmTokens) ? ud.fcmTokens : [];
+    const info = ud.fcmTokenInfo || {};
+    const devices = tokens.map((t) => {
+      const i = info[t] || {};
+      return {
+        preview: String(t).slice(0, 10) + "\u2026",
+        addedAt: i.addedAt ? new Date(i.addedAt).toISOString() : null,
+        platform: i.platform || null,
+        ua: i.ua || null
+      };
+    });
+    return res.json({ uid, count: tokens.length, devices });
+  } catch (err) {
     return res.status(500).json({ error: err.message });
   }
 });
@@ -238,7 +321,11 @@ async function sendAndCleanup(payload, tokens, targetLabel) {
       const code = resp.error.code;
       if (
         code === "messaging/invalid-registration-token" ||
-        code === "messaging/registration-token-not-registered"
+        code === "messaging/registration-token-not-registered" ||
+        // Web-push auth key invalid/rotated (or the token belongs to another
+        // project). The token can never deliver, so prune it instead of
+        // retrying it on every send.
+        code === "messaging/third-party-auth-error"
       ) {
         staleTokens.push(tokens[idx]);
       }
