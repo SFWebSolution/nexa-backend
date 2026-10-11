@@ -91,6 +91,7 @@ app.post("/api/save-token", async (req, res) => {
       { merge: true }
     );
 
+    invalidateTokenCache(uid);
     console.log(`📲 FCM Token saved for user: ${uid} (${String(platform || "unknown")})`);
     return res.json({ success: true, message: "Token saved successfully" });
   } catch (err) {
@@ -198,6 +199,51 @@ app.get("/api/push-diagnostics", async (req, res) => {
 });
 
 /**
+ * Send a notification to MANY uids in one request (group message, channel post,
+ * story). The client sends the recipient uid list it already has locally, so
+ * the backend does not have to discover members.
+ * POST /api/send-notification-bulk
+ * Body: { targetUids: [], title, body, icon, data }
+ */
+app.post("/api/send-notification-bulk", async (req, res) => {
+  try {
+    const { targetUids, title, body, icon, data } = req.body;
+    if (!Array.isArray(targetUids) || !targetUids.length || !title) {
+      return res.status(400).json({ error: "Missing targetUids or title" });
+    }
+    // Cap the fan-out so a malformed/abusive call can't melt the instance.
+    const uids = [...new Set(targetUids.filter(u => typeof u === "string" && u))].slice(0, 500);
+
+    let sent = 0, failed = 0, devices = 0, pruned = 0;
+    for (const uid of uids) {
+      let tokens = [];
+      try {
+        tokens = await getTokensForUid(uid);
+      } catch (e) {
+        continue;
+      }
+      if (!tokens.length) continue;
+      const payload = buildFCMPayload(title, body, icon, data, tokens);
+      const { response, staleTokens } = await sendAndCleanup(payload, tokens, `bulk -> ${uid}`);
+      devices += tokens.length;
+      sent += response.successCount;
+      failed += response.failureCount;
+      if (staleTokens.length) {
+        pruned += staleTokens.length;
+        await db.collection("users").doc(uid)
+          .update({ fcmTokens: admin.firestore.FieldValue.arrayRemove(...staleTokens) })
+          .catch(() => {});
+        invalidateTokenCache(uid);
+      }
+    }
+    return res.json({ success: true, recipients: uids.length, devices, sent, failed, pruned });
+  } catch (err) {
+    console.error("bulk push error:", err);
+    return res.status(500).json({ error: err.message });
+  }
+});
+
+/**
  * Helper: Build a DATA-ONLY FCM payload.
  * ──────────────────────────────────────────────────────────────────
  * KEY DESIGN DECISION – We intentionally do NOT include a top-level
@@ -293,6 +339,29 @@ function buildFCMPayload(title, body, icon, data, tokens) {
 
     tokens: tokens
   };
+}
+
+// uid -> { tokens, at }. Group/channel/story sends fan out to many uids; without
+// a cache that is one Firestore read per recipient per message.
+const _tokenCache = new Map();
+const TOKEN_CACHE_TTL = 5 * 60 * 1000;
+async function getTokensForUid(uid) {
+  const hit = _tokenCache.get(uid);
+  if (hit && Date.now() - hit.at < TOKEN_CACHE_TTL) return hit.tokens;
+  const snap = await db.collection("users").doc(uid).get();
+  if (!snap.exists) {
+    _tokenCache.set(uid, { tokens: [], at: Date.now() });
+    return [];
+  }
+  const d = snap.data();
+  let tokens = [];
+  if (Array.isArray(d.fcmTokens)) tokens = d.fcmTokens.filter(t => typeof t === "string" && t);
+  else if (d.fcmToken) tokens = [d.fcmToken];
+  _tokenCache.set(uid, { tokens, at: Date.now() });
+  return tokens;
+}
+function invalidateTokenCache(uid) {
+  _tokenCache.delete(uid);
 }
 
 /**
