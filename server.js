@@ -745,7 +745,17 @@ function startAutoPushListener() {
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {
   console.log(`🚀 Nexa Backend running on port ${PORT}`);
-  startAutoPushListener();
+  // Every 1:1 message is now pushed directly by the SENDER (app-main.js
+  // notifyPeerOfMessage), so this global `chats` listener is redundant. It is
+  // also the single biggest Firestore READ source: an unbounded live query over
+  // every unread message, re-evaluated on every message change. Keep it OFF
+  // unless explicitly re-enabled with ENABLE_CHATS_PUSH_LISTENER=true.
+  if (String(process.env.ENABLE_CHATS_PUSH_LISTENER).toLowerCase() === "true") {
+    startAutoPushListener();
+  } else {
+    console.log("ℹ️ Chats auto-push listener disabled (client-triggered push). "
+      + "Set ENABLE_CHATS_PUSH_LISTENER=true to re-enable.");
+  }
 
   // Keep the instance from idling. On hosts that spin free instances down
   // (e.g. Render), a slept process means the auto-push listener is gone and
