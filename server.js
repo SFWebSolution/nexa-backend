@@ -522,6 +522,10 @@ function startAutoPushListener() {
         const docId = change.doc.id;
         const msg = change.doc.data();
 
+        // The sender already pushed this message directly (app-main.js
+        // notifyPeerOfMessage stamps messageId). Skip it here: no duplicate
+        // notification, and no Firestore write spent on the `_pushed` flag.
+        if (msg && msg.messageId) return;
         if (!msg || msg._pushed || processedDocs.has(docId) || inFlight.has(docId)) return;
         inFlight.add(docId);
         processedDocs.add(docId);
@@ -586,4 +590,18 @@ const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {
   console.log(`🚀 Nexa Backend running on port ${PORT}`);
   startAutoPushListener();
+
+  // Keep the instance from idling. On hosts that spin free instances down
+  // (e.g. Render), a slept process means the auto-push listener is gone and
+  // server-side pushes silently stop until the next request wakes it. A light
+  // self-ping keeps it resident. Set RENDER_EXTERNAL_URL (Render does this
+  // automatically) or SELF_URL to enable.
+  const selfUrl = process.env.RENDER_EXTERNAL_URL || process.env.SELF_URL;
+  if (selfUrl) {
+    const ping = () => fetch(selfUrl.replace(/\/$/, "") + "/api/health").catch(() => {});
+    setInterval(ping, 10 * 60 * 1000);
+    console.log(`💓 Keep-alive enabled -> ${selfUrl}`);
+  } else {
+    console.log("⚠️ No RENDER_EXTERNAL_URL/SELF_URL set; keep-alive disabled");
+  }
 });
